@@ -1,0 +1,94 @@
+name: Frontend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Install, validate, test and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Detect frontend project
+        id: project
+        shell: bash
+        run: |
+          if [[ -f package.json ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No package.json found. The repository is currently a scaffold; frontend checks will activate when the React app is added."
+          fi
+
+      - name: Set up Node.js
+        if: steps.project.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || (hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || (hashFiles('yarn.lock') != '' && 'yarn' || '')) }}
+
+      - name: Enable Corepack
+        if: steps.project.outputs.present == 'true'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          elif [[ -f yarn.lock ]]; then
+            yarn install --immutable
+          elif [[ -f package-lock.json ]]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run lint script
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.lint ? 0 : 1)"; then
+            npm run lint --if-present
+          else
+            echo "No lint script configured; skipping."
+          fi
+
+      - name: Run test script
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test -- --run
+          else
+            echo "No test script configured; skipping."
+          fi
+
+      - name: Build production bundle
+        if: steps.project.outputs.present == 'true'
+        run: npm run build --if-present
+
+      - name: Upload production build
+        if: steps.project.outputs.present == 'true' && hashFiles('dist/**', 'build/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: |
+            dist/
+            build/
+          if-no-files-found: ignore
+          retention-days: 14
