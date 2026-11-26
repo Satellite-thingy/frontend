@@ -1,0 +1,67 @@
+name: Frontend Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build frontend release artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Detect frontend project
+        id: project
+        shell: bash
+        run: |
+          if [[ -f package.json ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No package.json found. Release packaging is waiting for the React application."
+          fi
+
+      - name: Set up Node.js
+        if: steps.project.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        if: steps.project.outputs.present == 'true'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          elif [[ -f yarn.lock ]]; then
+            yarn install --immutable
+          elif [[ -f package-lock.json ]]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build production frontend
+        if: steps.project.outputs.present == 'true'
+        run: npm run build
+
+      - name: Upload release artifact
+        if: steps.project.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-release-${{ github.ref_name }}
+          path: |
+            dist/
+            build/
+          if-no-files-found: error
+          retention-days: 30
